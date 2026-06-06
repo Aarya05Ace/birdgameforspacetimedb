@@ -1,0 +1,11 @@
+.DS_Store
+node_modules/
+dist/
+.env
+.env.local
+
+# test artifacts
+chick-*.png
+smoke-*.png
+spacetimedb/node_modules/
+.github/workflows/

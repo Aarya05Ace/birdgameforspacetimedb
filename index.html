@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>birdybird</title>
+
+  <!-- PWA: fullscreen on iOS home screen -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="birdybird" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <!-- Cache-bust the manifest so iOS re-reads it after identity/start fixes -->
+  <link rel="manifest" href="manifest.json?v=4" />
+  <!-- Reduce iOS HTML caching so the latest JS bundle hash is always picked up -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    /* Dynamic viewport height (dvh) — adjusts when Safari's URL bar shrinks */
+    html { width: 100%; height: 100vh; height: 100dvh; }
+    body {
+      width: 100%; height: 100vh; height: 100dvh;
+      /* +1px so iOS Safari has something to scroll, which collapses the URL bar */
+      min-height: calc(100dvh + 1px);
+      overflow: hidden;
+    }
+    canvas { display: block; }
+
+    /* Install-as-App hint — only shown on iOS Safari when not already standalone */
+    #install-hint {
+      position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%);
+      z-index: 950; display: none;
+      background: rgba(10, 22, 40, 0.85);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(96, 192, 255, 0.35);
+      border-radius: 999px;
+      padding: 8px 14px 8px 14px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.88);
+      max-width: calc(100vw - 24px);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #install-hint.visible { display: flex; align-items: center; gap: 10px; }
+    #install-hint-close {
+      background: transparent; border: none; color: rgba(255, 255, 255, 0.6);
+      font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px;
+      font-weight: 300;
+    }
+
+    /* --- Top bar --- */
+    #topbar {
+      position: fixed; top: 10px; left: 10px; right: 10px;
+      display: flex; align-items: center; justify-content: space-between;
+      z-index: 900; pointer-events: none;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    }
+    #topbar-left, #topbar-right {
+      display: flex; align-items: center; gap: 6px;
+      pointer-events: auto;
+    }
+    .tb-item {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 12px; border-radius: 999px;
+      background: rgba(10, 22, 40, 0.55);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.75);
+      font-size: 12px; line-height: 1;
+      text-decoration: none; cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .tb-item:hover {
+      background: rgba(10, 22, 40, 0.8);
+      border-color: rgba(96, 192, 255, 0.4);
+      color: #fff;
+    }
+    /* Primary back-to-blog CTA — bright gradient + soft pulsing glow so
+       players can find the way back even after a long flight session. */
+    .tb-primary {
+      background: linear-gradient(135deg, #22d3ee, #0ea5e9);
+      border-color: rgba(255, 255, 255, 0.35);
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+      padding: 9px 16px;
+      box-shadow:
+        0 0 0 0 rgba(34, 211, 238, 0.55),
+        0 4px 16px rgba(34, 211, 238, 0.35);
+      animation: tb-primary-pulse 2.8s ease-in-out infinite;
+    }
+    @keyframes tb-primary-pulse {
+      0%, 100% {
+        box-shadow:
+          0 0 0 0 rgba(34, 211, 238, 0.55),
+          0 4px 16px rgba(34, 211, 238, 0.35);
+      }
+      50% {
+        box-shadow:
+          0 0 0 7px rgba(34, 211, 238, 0),
+          0 4px 20px rgba(34, 211, 238, 0.6);
+      }
+    }
+    .tb-primary:hover {
+      background: linear-gradient(135deg, #06b6d4, #0284c7);
+      box-shadow: 0 6px 22px rgba(34, 211, 238, 0.7);
+      animation: none;
+      transform: translateY(-1px);
+    }
+    /* Respect reduced-motion users — kill the pulse for them */
+    @media (prefers-reduced-motion: reduce) {
+      .tb-primary { animation: none; }
+    }
+    .tb-item .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: #44dd88; /* iFFT = green */
+    }
+    .tb-item .dot.fallback { background: #ffaa44; } /* Gerstner = amber */
+
+    @media (max-width: 500px) {
+      .tb-item { font-size: 11px; padding: 6px 10px; }
+      .tb-primary { font-size: 12px; padding: 7px 12px; }
+      .tb-hide-mobile { display: none; }
+    }
+
+    /* --- Credits overlay --- */
+    #credits-overlay {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(8, 16, 32, 0.92);
+      display: none; align-items: center; justify-content: center; padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    }
+    #credits-overlay.open { display: flex; }
+    #credits-card {
+      max-width: 520px;
+      background: linear-gradient(135deg, #0a1628 0%, #1a2a4a 50%, #0a1628 100%);
+      border: 1px solid rgba(96, 192, 255, 0.3); border-radius: 16px;
+      padding: 32px; color: white; position: relative;
+    }
+    #credits-close {
+      position: absolute; top: 12px; right: 12px;
+      background: transparent; border: none; color: rgba(255, 255, 255, 0.6);
+      font-size: 24px; cursor: pointer; padding: 4px 10px;
+    }
+    #credits-card h2 { color: #60c0ff; font-size: 22px; margin-bottom: 20px; }
+    #credits-card h3 { color: #ffaa44; font-size: 16px; margin-bottom: 8px; }
+    #credits-card .section { margin-bottom: 20px; }
+    #credits-card p { color: #bbccdd; font-size: 13px; line-height: 1.6; }
+    #credits-card a { color: #60c0ff; text-decoration: none; }
+    #credits-card a:hover { text-decoration: underline; }
+    #credits-card .lic-note { color: #667788; font-size: 11px; margin-top: 8px; }
+
+    /* --- Ring Rush HUD --- */
+    #rr-hud {
+      position: fixed;
+      top: calc(max(env(safe-area-inset-top), 10px) + 48px);
+      left: 50%; transform: translateX(-50%);
+      z-index: 850;
+      /* Hidden by default — RingRushUI adds .visible once the game really starts */
+      display: none;
+      flex-direction: column; align-items: center;
+      gap: 2px;
+      pointer-events: none;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+    }
+    #rr-hud.visible { display: flex; }
+    #rr-hud .rr-timer {
+      font-size: 48px; font-weight: 800; line-height: 1;
+      color: #ffe088;
+      letter-spacing: -0.5px;
+    }
+    #rr-hud .rr-timer.warn {
+      color: #ff7766;
+      animation: rr-pulse 0.8s ease-in-out infinite;
+    }
+    @keyframes rr-pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.1); }
+    }
+    #rr-hud .rr-timer.hit {
+      animation: rr-hit 0.35s ease-out;
+    }
+    @keyframes rr-hit {
+      0%   { transform: scale(1); color: #ffe088; text-shadow: 0 0 0 rgba(255, 221, 68, 0); }
+      40%  { transform: scale(1.35); color: #44ff88; text-shadow: 0 0 25px rgba(68, 255, 136, 0.9); }
+      100% { transform: scale(1); color: #ffe088; }
+    }
+
+    /* +10s bonus popup on ring collect */
+    .rr-bonus-popup {
+      position: fixed;
+      top: 45%; left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 820;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 56px; font-weight: 900;
+      color: #44ff88;
+      text-shadow: 0 0 20px rgba(68, 255, 136, 0.8), 0 4px 8px rgba(0, 0, 0, 0.5);
+      pointer-events: none;
+      animation: rr-bonus-rise 0.9s ease-out forwards;
+      letter-spacing: -1px;
+    }
+    @keyframes rr-bonus-rise {
+      0%   { opacity: 0; transform: translate(-50%, -40%) scale(0.6); }
+      15%  { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+      25%  { transform: translate(-50%, -55%) scale(1); }
+      100% { opacity: 0; transform: translate(-50%, -140%) scale(0.95); }
+    }
+    #rr-hud .rr-score {
+      font-size: 13px; font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+      letter-spacing: 0.5px;
+    }
+    #rr-hud .rr-score span {
+      color: #ffdd44;
+      font-weight: 800;
+    }
+    #rr-hud .rr-level {
+      font-size: 11px; font-weight: 600;
+      color: rgba(160, 200, 255, 0.85);
+      letter-spacing: 0.5px;
+      margin-top: 2px;
+    }
+    #rr-hud .rr-level span {
+      color: #60c0ff;
+      font-weight: 800;
+    }
+
+    /* Level-up announcement */
+    #rr-levelup {
+      position: fixed; inset: 0; z-index: 1050;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none;
+      opacity: 0;
+    }
+    #rr-levelup.visible {
+      animation: rr-levelup-flash 2.4s ease-out forwards;
+    }
+    @keyframes rr-levelup-flash {
+      0%   { opacity: 0; transform: scale(0.5); }
+      15%  { opacity: 1; transform: scale(1.05); }
+      20%  { transform: scale(1); }
+      80%  { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.2); }
+    }
+    .rr-levelup-inner {
+      text-align: center;
+      padding: 40px 60px;
+      background: radial-gradient(ellipse at center, rgba(96, 192, 255, 0.28), rgba(10, 22, 40, 0.6) 70%);
+      border: 2px solid rgba(96, 192, 255, 0.5);
+      border-radius: 24px;
+      box-shadow: 0 0 80px rgba(96, 192, 255, 0.5), inset 0 0 40px rgba(96, 192, 255, 0.2);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    }
+    .rr-levelup-label {
+      font-size: 15px; font-weight: 700;
+      letter-spacing: 4px; text-transform: uppercase;
+      color: #8aa0b8; margin-bottom: 4px;
+    }
+    .rr-levelup-num {
+      font-size: 110px; font-weight: 900; line-height: 1;
+      color: #fff;
+      text-shadow: 0 0 30px rgba(96, 192, 255, 0.9), 0 2px 4px rgba(0, 0, 0, 0.6);
+      font-variant-numeric: tabular-nums;
+    }
+    .rr-levelup-biome {
+      margin-top: 10px;
+      font-size: 18px; font-weight: 600;
+      letter-spacing: 2px; text-transform: uppercase;
+      color: #ffdd88;
+      text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+    }
+    .rr-levelup-biome:empty { display: none; }
+
+    /* --- Nest Quest HUD ---
+       Bottom-center pill row to leave the upper sky free. Flight-stats
+       overlay lives at bottom-left (desktop only) so the HUD doesn't
+       collide there. */
+    #nq-hud {
+      position: fixed;
+      bottom: calc(max(env(safe-area-inset-bottom), 10px) + 4px);
+      left: 50%; transform: translateX(-50%);
+      z-index: 850;
+      display: none;
+      flex-direction: column; align-items: center;
+      gap: 4px;
+      pointer-events: none;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+      max-width: calc(100vw - 24px);
+    }
+    #nq-hud.visible { display: flex; }
+    #nq-hud .nq-row {
+      display: flex; gap: 4px; flex-wrap: wrap; justify-content: center;
+    }
+    #nq-hud .nq-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 5px 10px; border-radius: 999px;
+      background: rgba(10, 22, 40, 0.7);
+      border: 1px solid rgba(96, 192, 255, 0.25);
+      color: #e0e8f0;
+      font-size: 13px; font-weight: 700; line-height: 1;
+      transition: transform 0.2s, border-color 0.3s, background 0.3s;
+    }
+    #nq-hud .nq-chip-time {
+      background: rgba(10, 22, 40, 0.85);
+      color: #ffe088; font-size: 15px;
+      padding: 6px 12px;
+      position: relative;  /* anchor for +30s recharge flash */
+    }
+    #nq-hud .nq-chip-time.warn {
+      color: #ff7766;
+      animation: rr-pulse 0.8s ease-in-out infinite;
+    }
+    #nq-hud .nq-chip-lvl {
+      background: rgba(34, 132, 204, 0.25);
+      border-color: rgba(96, 192, 255, 0.4);
+      letter-spacing: 0.5px;
+    }
+    #nq-hud .nq-chip-lvl b { color: #88ddff; }
+    #nq-hud .nq-slot b { color: #ffdd44; }
+    #nq-hud .nq-slot.done {
+      background: rgba(68, 221, 136, 0.2);
+      border-color: rgba(68, 221, 136, 0.6);
+    }
+    #nq-hud .nq-slot.done b { color: #44ff88; }
+    #nq-hud .nq-slot.pulse { animation: nq-slot-pulse 0.4s ease-out; }
+    @keyframes nq-slot-pulse {
+      0%   { transform: scale(1); }
+      40%  { transform: scale(1.3); }
+      100% { transform: scale(1); }
+    }
+    #nq-hud .nq-hint {
+      font-size: 11px; color: rgba(255, 255, 255, 0.7);
+      background: rgba(10, 22, 40, 0.55);
+      padding: 3px 9px; border-radius: 999px;
+      max-width: 90vw; text-align: center;
+    }
+    #nq-hud .nq-hint.urgent { color: #ffdd44; font-weight: 700; }
+    /* Speed-boost chip while active */
+    #nq-hud .nq-chip-boost {
+      background: linear-gradient(135deg, rgba(96,212,255,0.9), rgba(34,160,224,0.9));
+      border-color: rgba(255,255,255,0.5);
+      color: #052838;
+      animation: nq-boost-pulse 0.9s ease-in-out infinite;
+    }
+    #nq-hud .nq-chip-boost b { color: #052838; }
+    @keyframes nq-boost-pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(96,212,255,0.6); }
+      50%  { box-shadow: 0 0 14px 4px rgba(96,212,255,0.4); }
+      100% { box-shadow: 0 0 0 0 rgba(96,212,255,0.0); }
+    }
+    /* Big mid-screen flash on speed-pickup */
+    .nq-boost-flash {
+      position: fixed; top: 38%; left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 900;
+      background: radial-gradient(ellipse at center, rgba(96,212,255,0.4), rgba(10,22,40,0.5) 70%);
+      border: 2px solid rgba(96,212,255,0.8);
+      border-radius: 18px;
+      padding: 22px 36px;
+      font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      color: #fff; text-align: center;
+      pointer-events: none;
+      animation: nq-flash 1.7s ease-out forwards;
+      box-shadow: 0 0 60px rgba(96,212,255,0.6);
+    }
+    .nq-boost-flash b {
+      font-size: 32px; font-weight: 900; letter-spacing: 1px;
+      text-shadow: 0 0 18px rgba(96,212,255,0.8);
+      color: #aef0ff;
+    }
+    .nq-boost-flash span {
+      font-size: 13px; color: #c0e8ff;
+      letter-spacing: 1.5px; text-transform: uppercase;
+    }
+    /* "+30s" recharge feedback when a ring is picked up */
+    .nq-recharge-flash {
+      position: absolute;
+      top: -22px; left: 50%;
+      transform: translateX(-50%);
+      color: #44ff88; font-size: 16px; font-weight: 800;
+      letter-spacing: 0.5px;
+      text-shadow: 0 0 8px rgba(68, 255, 136, 0.6);
+      pointer-events: none;
+      animation: nq-recharge 1.0s ease-out forwards;
+    }
+    @keyframes nq-recharge {
+      0%   { opacity: 0; transform: translate(-50%, 4px); }
+      20%  { opacity: 1; transform: translate(-50%, -2px); }
+      100% { opacity: 0; transform: translate(-50%, -22px); }
+    }
+    /* On narrow screens, hide the helper sentence — chips are self-explanatory */
+    @media (max-width: 520px) {
+      #nq-hud .nq-hint { display: none; }
+      #nq-hud .nq-hint.urgent { display: block; }
+    }
+
+    /* Quest-complete mid-game flash */
+    .nq-complete-flash {
+      position: fixed; top: 45%; left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 900;
+      background: radial-gradient(ellipse at center, rgba(68,221,136,0.35), rgba(10,22,40,0.5) 70%);
+      border: 2px solid rgba(68,221,136,0.7);
+      border-radius: 18px;
+      padding: 24px 36px;
+      font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      color: #fff; text-align: center;
+      pointer-events: none;
+      animation: nq-flash 2.2s ease-out forwards;
+      box-shadow: 0 0 60px rgba(68,221,136,0.6);
+    }
+    .nq-complete-flash b {
+      font-size: 40px; font-weight: 900; letter-spacing: 1px;
+      text-shadow: 0 0 20px rgba(68,221,136,0.8);
+    }
+    .nq-complete-flash span {
+      font-size: 14px; color: #ccffdd;
+      letter-spacing: 2px; text-transform: uppercase;
+    }
+    @keyframes nq-flash {
+      0%   { opacity: 0; transform: translate(-50%, -40%) scale(0.6); }
+      15%  { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
+      25%  { transform: translate(-50%, -50%) scale(1); }
+      85%  { opacity: 1; }
+      100% { opacity: 0; transform: translate(-50%, -70%) scale(0.95); }
+    }
+
+    /* Nest Quest result modal */
+    #nq-modal {
+      position: fixed; inset: 0; z-index: 1100;
+      background: rgba(8, 16, 32, 0.9);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      display: none; align-items: center; justify-content: center;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    }
+    #nq-modal.visible { display: flex; }
+    #nq-modal .nq-card {
+      max-width: 360px; width: 100%;
+      background: linear-gradient(135deg, #0a1628 0%, #1a2a4a 55%, #0a1628 100%);
+      border: 1px solid rgba(96, 192, 255, 0.35);
+      border-radius: 18px;
+      padding: 28px 24px 22px;
+      color: white; text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    }
+    #nq-modal .nq-title {
+      font-size: 18px; font-weight: 700; color: #ffaa44;
+      letter-spacing: 1px; margin-bottom: 18px;
+    }
+    #nq-modal .nq-result {
+      font-size: 68px; font-weight: 900;
+      color: #ffdd44; line-height: 1;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 0 20px rgba(255, 221, 68, 0.3);
+    }
+    #nq-modal .nq-result-label {
+      font-size: 12px; color: #8aa0b8; margin-top: 4px;
+      letter-spacing: 0.8px; text-transform: uppercase;
+    }
+    #nq-modal .nq-best {
+      display: flex; justify-content: space-between; align-items: baseline;
+      margin: 20px 10px 12px;
+      padding: 10px 14px;
+      background: rgba(96, 192, 255, 0.08);
+      border: 1px solid rgba(96, 192, 255, 0.25);
+      border-radius: 10px;
+      font-size: 13px;
+    }
+    #nq-modal .nq-best > :first-child { color: #8aa0b8; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
+    #nq-modal .nq-best > :last-child { color: #60c0ff; font-weight: 800; font-size: 20px; }
+    #nq-modal .nq-breakdown {
+      font-size: 12px; color: #8aa0b8; margin-bottom: 16px; line-height: 1.5;
+    }
+    #nq-modal .nq-breakdown b { color: #ffdd44; font-size: 15px; }
+    #nq-modal .nq-retry {
+      display: block; width: 100%;
+      padding: 16px; border: none; border-radius: 12px;
+      background: linear-gradient(135deg, #ffaa22, #ff7744);
+      color: white; font-size: 16px; font-weight: 700;
+      cursor: pointer; letter-spacing: 0.5px;
+      box-shadow: 0 4px 16px rgba(255, 136, 44, 0.4);
+    }
+    #nq-modal .nq-retry:active { transform: scale(0.98); }
+
+    /* --- Ring Rush Game-Over Modal --- */
+    #rr-modal {
+      position: fixed; inset: 0; z-index: 1100;
+      background: rgba(8, 16, 32, 0.88);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      display: none; align-items: center; justify-content: center;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    }
+    #rr-modal.visible { display: flex; }
+    .rr-card {
+      max-width: 340px; width: 100%;
+      background: linear-gradient(135deg, #0a1628 0%, #1a2a4a 55%, #0a1628 100%);
+      border: 1px solid rgba(255, 221, 68, 0.35);
+      border-radius: 18px;
+      padding: 28px 24px 22px;
+      color: white; text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    }
+    .rr-card .rr-title {
+      font-size: 14px; font-weight: 700;
+      letter-spacing: 2px; text-transform: uppercase;
+      color: #ff9966; margin-bottom: 18px;
+    }
+    .rr-card .rr-final {
+      font-size: 68px; font-weight: 900;
+      color: #ffdd44; line-height: 1;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 0 20px rgba(255, 221, 68, 0.3);
+    }
+    .rr-card .rr-label {
+      font-size: 12px; color: #8aa0b8;
+      margin-top: 4px; letter-spacing: 0.8px;
+      text-transform: uppercase;
+    }
+    .rr-card .rr-best {
+      display: flex; justify-content: space-between; align-items: baseline;
+      margin: 22px 10px 18px;
+      padding: 10px 14px;
+      background: rgba(96, 192, 255, 0.08);
+      border: 1px solid rgba(96, 192, 255, 0.25);
+      border-radius: 10px;
+      font-size: 13px;
+    }
+    .rr-card .rr-best > :first-child {
+      color: #8aa0b8; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+    }
+    .rr-card .rr-best > :last-child {
+      color: #60c0ff; font-weight: 800; font-size: 20px;
+      font-variant-numeric: tabular-nums;
+    }
+    .rr-card .rr-retry {
+      display: block; width: 100%;
+      padding: 16px; border: none; border-radius: 12px;
+      background: linear-gradient(135deg, #ffaa22, #ff7744);
+      color: white; font-size: 16px; font-weight: 700;
+      cursor: pointer; letter-spacing: 0.5px;
+      box-shadow: 0 4px 16px rgba(255, 136, 44, 0.4);
+    }
+    .rr-card .rr-retry:active { transform: scale(0.98); }
+  </style>
+</head>
+<body>
+  <!-- Top bar -->
+  <div id="topbar">
+    <div id="topbar-left">
+      <a href="https://ki-mathias.de/" class="tb-item tb-primary">
+        <span>&larr;</span><span>ki-mathias.de</span>
+      </a>
+      <button id="credits-btn" class="tb-item" title="Credits">
+        <span>Credits</span>
+      </button>
+      <button id="options-btn" class="tb-item" title="Options">
+        <span>Options</span>
+      </button>
+    </div>
+    <div id="topbar-right">
+      <div id="water-mode" class="tb-item tb-hide-mobile" title="Water rendering mode">
+        <span class="dot"></span><span id="water-mode-label">Water</span>
+      </div>
+      <button id="lang-toggle" class="tb-item" style="font-weight:600;">EN</button>
+    </div>
+  </div>
+
+  <!-- Credits overlay -->
+  <div id="credits-overlay">
+    <div id="credits-card">
+      <button id="credits-close">&times;</button>
+      <h2>Credits</h2>
+
+      <div class="section">
+        <h3>🌊 Ocean Waves</h3>
+        <p>
+          The realistic wave simulation uses <b>Phil Crowther's Ocean3 &amp; Ocean4
+          modules</b> (WebGL2 iFFT and WebGPU compute-shader iFFT). Much of the
+          inner WebGPU plumbing is <b>Attila Schroeder's</b> work. Amazing stuff
+          — thank you both!
+        </p>
+        <div style="margin-top:10px; font-size:12px;">
+          <a href="http://philcrowther.com/Aviation/3JS_demos.html" target="_blank"
+            style="margin-right:12px;">→ Phil's Three.js Demos</a>
+          <a href="https://discourse.threejs.org/u/phil_crowther/summary" target="_blank"
+            style="margin-right:12px;">→ Phil @ three.js forum</a>
+          <a href="https://github.com/Spiri0" target="_blank"
+            style="margin-right:12px;">→ Attila on GitHub</a>
+          <a href="https://spiri0.github.io/Threejs-WebGPU-IFFT-Ocean/" target="_blank"
+            style="margin-right:12px;">→ Attila's WebGPU iFFT Ocean</a>
+          <a href="https://discourse.threejs.org/t/ifft-ocean-wave-generator-module/51800" target="_blank">→ Discourse Post</a>
+        </div>
+        <p class="lic-note">
+          Ocean3.js &amp; Ocean4.js © Phil Crowther, Attila Schroeder · CC BY-NC-SA 3.0
+        </p>
+      </div>
+
+      <div class="section">
+        <h3>🌳 Procedural Forest</h3>
+        <p>
+          The L-system instanced forest architecture is inspired by
+          <b>red-reddington</b>'s generous Three.js CodePens — high-performance
+          procedural trees in 2 draw calls. Thank you!
+        </p>
+        <div style="margin-top:10px; font-size:12px;">
+          <a href="https://codepen.io/the-red-reddington" target="_blank"
+            style="margin-right:12px;">→ red-reddington on CodePen</a>
+          <a href="https://discourse.threejs.org/u/red-reddington/summary" target="_blank"
+            style="margin-right:12px;">→ red @ three.js forum</a>
+          <a href="https://discourse.threejs.org/t/procedural-instanced-forest-high-performance-real-trees/88610" target="_blank">→ Discourse Post</a>
+        </div>
+        <p class="lic-note">Shared under MIT — thanks for making it open.</p>
+      </div>
+
+      <div class="section">
+        <h3>🦅 VogelSimulator</h3>
+        <p>
+          Built with Three.js + MediaPipe. Source code on
+          <a href="https://github.com/pmmathias/VogelSimulator" target="_blank">GitHub</a>.
+        </p>
+      </div>
+
+      <div class="section">
+        <h3>📦 Assets</h3>
+        <p style="font-size:12px; line-height:1.5;">
+          Terrain &amp; building textures: <a href="https://polyhaven.com" target="_blank">Poly Haven</a> (CC0)<br>
+          Stork 3D model: Community asset<br>
+          Blog: <a href="https://ki-mathias.de/" target="_blank">ki-mathias.de</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Options overlay -->
+  <style>
+    #options-overlay {
+      position: fixed; inset: 0; z-index: 2000;
+      background: rgba(10, 22, 40, 0.88);
+      display: none; align-items: center; justify-content: center;
+      backdrop-filter: blur(8px);
+    }
+    #options-overlay.open { display: flex; }
+    #options-card {
+      background: #0f1a2f; color: #dce4f2;
+      border: 1px solid rgba(100, 140, 200, 0.25);
+      border-radius: 12px;
+      max-width: 520px; width: 92%; max-height: 85vh; overflow-y: auto;
+      padding: 28px 30px; position: relative;
+      font-family: -apple-system, sans-serif;
+    }
+    #options-card h2 { margin: 0 0 16px; font-size: 20px; color: #60c0ff; }
+    #options-card h3 { margin: 18px 0 6px; font-size: 13px; color: #88aacc; letter-spacing: 0.5px; text-transform: uppercase; }
+    #options-close {
+      position: absolute; top: 12px; right: 16px;
+      background: none; border: none; color: #88aacc;
+      font-size: 28px; line-height: 1; cursor: pointer;
+    }
+    .opt-group { margin-bottom: 18px; }
+    .opt-group label {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 10px 12px; margin: 6px 0;
+      background: rgba(255,255,255,0.03); border-radius: 8px;
+      cursor: pointer; transition: background 0.15s;
+      font-size: 14px;
+    }
+    .opt-group label:hover { background: rgba(255,255,255,0.07); }
+    .opt-group label input { margin-top: 3px; accent-color: #60c0ff; }
+    .opt-group label.disabled {
+      opacity: 0.45; cursor: not-allowed;
+    }
+    .opt-group label.disabled:hover { background: rgba(255,255,255,0.03); }
+    .opt-desc {
+      display: block; font-size: 12px; color: #88aacc; margin-top: 2px;
+    }
+    .opt-unavail {
+      color: #e88866; font-size: 11px; margin-left: 6px; font-style: italic;
+    }
+    #options-apply-note {
+      margin-top: 16px; padding: 10px 14px;
+      background: rgba(96,192,255,0.08);
+      border-left: 3px solid #60c0ff;
+      border-radius: 4px;
+      font-size: 12px; color: #b0c4de;
+    }
+  </style>
+  <div id="options-overlay">
+    <div id="options-card">
+      <button id="options-close">&times;</button>
+      <h2>⚙️ Render Options</h2>
+
+      <div class="opt-group" data-option="renderer">
+        <h3>Renderer</h3>
+        <label><input type="radio" name="renderer" value="auto" checked><span><b>Auto (recommended)</b><span class="opt-desc">Uses WebGPU where available, WebGL2 otherwise.</span></span></label>
+        <label data-requires="webgpu"><input type="radio" name="renderer" value="webgpu"><span><b>Force WebGPU</b><span class="opt-desc">Modern compute-shader pipeline. Required for iFFT ×3 cascaded ocean.</span></span></label>
+        <label><input type="radio" name="renderer" value="webgl"><span><b>Force WebGL2</b><span class="opt-desc">Legacy path — most compatible but skips the TSL visual upgrades.</span></span></label>
+      </div>
+
+      <div class="opt-group" data-option="ocean">
+        <h3>Ocean Quality</h3>
+        <label data-requires="webgpu"><input type="radio" name="ocean" value="cascaded"><span><b>iFFT ×3 Cascaded (default, desktop)</b><span class="opt-desc">Three FFT spectra layered for richer multi-scale waves. Costs ~60% FPS vs single.</span></span></label>
+        <label><input type="radio" name="ocean" value="single"><span><b>Single Cascade</b><span class="opt-desc">Phil Crowther's Ocean4 iFFT — fast path, default on mobile.</span></span></label>
+      </div>
+
+      <div class="opt-group" data-option="detail">
+        <h3>Scene Detail</h3>
+        <label><input type="radio" name="detail" value="low"><span><b>Low</b><span class="opt-desc">~40% trees + conifers — for integrated GPUs / older laptops.</span></span></label>
+        <label><input type="radio" name="detail" value="mid"><span><b>Mid (default)</b><span class="opt-desc">Balanced density for typical desktop hardware.</span></span></label>
+        <label><input type="radio" name="detail" value="high"><span><b>High</b><span class="opt-desc">~175% trees + conifers — for fat discrete GPUs that want to flex.</span></span></label>
+      </div>
+
+      <div class="opt-group" id="options-mobile-group" style="display:none;">
+        <h3>Mobile Tilt</h3>
+        <button id="opt-recalib-btn" style="
+          width:100%; padding:12px 16px; font-size:14px; font-weight:600;
+          background:linear-gradient(135deg, #2080cc, #40a0ff); color:white;
+          border:none; border-radius:10px; cursor:pointer;
+          box-shadow:0 4px 14px rgba(32,128,204,0.35);
+          display:flex; align-items:center; justify-content:center; gap:8px;">
+          🔄 Recalibrate tilt
+        </button>
+        <p style="margin-top:8px; font-size:12px; color:rgba(255,255,255,0.55);
+          line-height:1.4;">
+          Replays the calibration wizard. Use this if your tilt feels reversed
+          or unresponsive.
+        </p>
+      </div>
+
+      <div id="options-apply-note">
+        Changing an option reloads the page with the new setting active.
+      </div>
+    </div>
+  </div>
+
+  <!-- Install-as-App hint (iOS Safari only, non-standalone) -->
+  <div id="install-hint">
+    <span>Share &rarr; Zum Home-Bildschirm &rarr; Vollbild</span>
+    <button id="install-hint-close" aria-label="Ausblenden">&times;</button>
+  </div>
+
+  <script>
+    // --- iOS URL-bar collapse: scroll 1px on first user gesture ---
+    // Apple blocks auto-scroll-on-load, so we defer until the user taps.
+    (() => {
+      let done = false;
+      const collapse = () => {
+        if (done) return;
+        done = true;
+        window.scrollTo(0, 1);
+      };
+      window.addEventListener('touchstart', collapse, { once: true, passive: true });
+      window.addEventListener('click', collapse, { once: true });
+    })();
+
+    // --- Install-as-App hint for iOS Safari (only if not yet added to home screen) ---
+    (() => {
+      const ua = navigator.userAgent;
+      const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+                    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
+      const isStandalone = window.navigator.standalone ||
+                           window.matchMedia('(display-mode: standalone)').matches;
+      const dismissed = localStorage.getItem('installHintDismissed') === '1';
+
+      if (isIOS && isSafari && !isStandalone && !dismissed) {
+        const hint = document.getElementById('install-hint');
+        // Delay a few seconds so the game UI appears first
+        setTimeout(() => hint.classList.add('visible'), 3500);
+        document.getElementById('install-hint-close').addEventListener('click', () => {
+          hint.classList.remove('visible');
+          localStorage.setItem('installHintDismissed', '1');
+        });
+      }
+    })();
+
+    // Credits overlay
+    const ov = document.getElementById('credits-overlay');
+    document.getElementById('credits-btn').addEventListener('click', () => ov.classList.add('open'));
+    document.getElementById('credits-close').addEventListener('click', () => ov.classList.remove('open'));
+    ov.addEventListener('click', (e) => { if (e.target === ov) ov.classList.remove('open'); });
+
+    // Options overlay — hardware-aware render settings
+    (function setupOptions() {
+      const oov = document.getElementById('options-overlay');
+      document.getElementById('options-btn').addEventListener('click', () => oov.classList.add('open'));
+      document.getElementById('options-close').addEventListener('click', () => oov.classList.remove('open'));
+      oov.addEventListener('click', (e) => { if (e.target === oov) oov.classList.remove('open'); });
+
+      // Detect what's actually available on this browser/hardware
+      const hasWebGPU = !!navigator.gpu;
+
+      // Disable options that require WebGPU if the browser can't provide it
+      oov.querySelectorAll('label[data-requires="webgpu"]').forEach((lbl) => {
+        if (!hasWebGPU) {
+          lbl.classList.add('disabled');
+          const input = lbl.querySelector('input');
+          if (input) input.disabled = true;
+          const unavail = document.createElement('span');
+          unavail.className = 'opt-unavail';
+          unavail.textContent = '— not supported by this browser';
+          lbl.querySelector('span').appendChild(unavail);
+        }
+      });
+
+      // Reflect current URL params as the selected radios
+      const params = new URLSearchParams(location.search);
+      const rendererParam = params.get('renderer');  // 'webgpu' | 'webgl' | null
+      const oceanParam    = params.get('ocean');     // 'single' | 'cascaded' | null
+      const rendererVal = rendererParam === 'webgpu' ? 'webgpu'
+                       : rendererParam === 'webgl'  ? 'webgl'
+                       : 'auto';
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+        || navigator.maxTouchPoints > 1;
+      // Default varies by device: desktop WebGPU → cascaded, mobile → single
+      const oceanDefault = (isMobile || !hasWebGPU) ? 'single' : 'cascaded';
+
+      // Mobile-only Recalibrate button
+      if (isMobile) {
+        const mobileGroup = document.getElementById('options-mobile-group');
+        if (mobileGroup) mobileGroup.style.display = '';
+        document.getElementById('opt-recalib-btn').addEventListener('click', () => {
+          oov.classList.remove('open');
+          if (typeof window.__triggerRecalib === 'function') {
+            window.__triggerRecalib();
+          }
+        });
+      }
+      const oceanVal    = oceanParam === 'single'   ? 'single'
+                        : oceanParam === 'cascaded' ? 'cascaded'
+                        : oceanDefault;
+      const detailParam = params.get('detail');
+      const detailVal = detailParam === 'low' || detailParam === 'high' || detailParam === 'mid'
+                      ? detailParam : 'mid';
+      const rRadio = oov.querySelector(`input[name="renderer"][value="${rendererVal}"]`);
+      const oRadio = oov.querySelector(`input[name="ocean"][value="${oceanVal}"]`);
+      const dRadio = oov.querySelector(`input[name="detail"][value="${detailVal}"]`);
+      if (rRadio) rRadio.checked = true;
+      if (oRadio) oRadio.checked = true;
+      if (dRadio) dRadio.checked = true;
+
+      // Apply: rebuild URL with new params and reload. Only set the ocean
+      // param when it differs from this device's default, so URLs stay clean.
+      function applyOptionChange() {
+        const r = oov.querySelector('input[name="renderer"]:checked')?.value || 'auto';
+        const o = oov.querySelector('input[name="ocean"]:checked')?.value    || oceanDefault;
+        const d = oov.querySelector('input[name="detail"]:checked')?.value   || 'mid';
+        const newParams = new URLSearchParams(location.search);
+        // Renderer
+        if (r === 'auto') newParams.delete('renderer');
+        else              newParams.set('renderer', r);
+        // Ocean
+        if (o === oceanDefault) newParams.delete('ocean');
+        else                    newParams.set('ocean', o);
+        // Detail
+        if (d === 'mid') newParams.delete('detail');
+        else             newParams.set('detail', d);
+        // Preserve skipcalib and other existing params naturally
+        const queryString = newParams.toString();
+        location.search = queryString ? '?' + queryString : '';
+      }
+      oov.querySelectorAll('input[type="radio"]').forEach((inp) => {
+        inp.addEventListener('change', applyOptionChange);
+      });
+    })();
+
+    // Water + renderer indicators — updated via window.__waterPath / __rendererPath
+    function refreshWaterMode() {
+      const label = document.getElementById('water-mode-label');
+      const dot = document.querySelector('#water-mode .dot');
+      const path = window.__waterPath;
+      const renderer = window.__rendererPath;
+      if (!label || !dot) return;
+      const rendererSuffix = renderer && renderer !== 'WebGL2' ? ` · ${renderer}` : '';
+      if (path === 'iFFT') {
+        label.textContent = 'iFFT' + rendererSuffix;
+        dot.classList.remove('fallback');
+        document.getElementById('water-mode').title = 'Waves: FFT-based (Ocean3) · Renderer: ' + (renderer || 'WebGL2');
+      } else if (path === 'iFFT (WebGPU)') {
+        label.textContent = 'iFFT · WebGPU';
+        dot.classList.remove('fallback');
+        document.getElementById('water-mode').title = 'Waves: WGSL compute iFFT (Ocean4) on WebGPURenderer';
+      } else if (path === 'iFFT ×3 (WebGPU)') {
+        label.textContent = 'iFFT ×3 · WebGPU';
+        dot.classList.remove('fallback');
+        document.getElementById('water-mode').title = 'Waves: 3 cascaded iFFT spectra (Attila-inspired) on WebGPURenderer';
+      } else if (path === 'Gerstner') {
+        label.textContent = 'Gerstner' + rendererSuffix;
+        dot.classList.add('fallback');
+        document.getElementById('water-mode').title = 'Waves: Gerstner fallback · Renderer: ' + (renderer || 'WebGL2');
+      } else if (path === 'Gerstner (WebGPU)') {
+        label.textContent = 'Gerstner · WebGPU';
+        dot.classList.add('fallback');
+        document.getElementById('water-mode').title = 'Waves: TSL Gerstner (Ocean4 unavailable) on WebGPURenderer';
+      } else {
+        label.textContent = '…';
+      }
+    }
+    // Poll until water is initialized (usually <2s)
+    const waterPoll = setInterval(() => {
+      if (window.__waterPath) { refreshWaterMode(); clearInterval(waterPoll); }
+    }, 100);
+    setTimeout(() => clearInterval(waterPoll), 10000);
+  </script>
+
+  <script type="module">
+    import { lang, toggleLang, onLangChange } from '/src/i18n.js';
+    const btn = document.getElementById('lang-toggle');
+    btn.textContent = lang() === 'de' ? 'EN' : 'DE';
+    btn.addEventListener('click', () => {
+      toggleLang();
+      btn.textContent = lang() === 'de' ? 'EN' : 'DE';
+    });
+    onLangChange(() => { btn.textContent = lang() === 'de' ? 'EN' : 'DE'; });
+  </script>
+
+  <script type="module" src="/src/main.js"></script>
+
+  <!-- Register the offline service worker (built only in production; the
+       request 404s harmlessly in `vite dev`). Relative path resolves to the
+       app's base scope (/birdybird/). -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('sw.js').catch(function () {});
+      });
+    }
+  </script>
+</body>
+</html>
